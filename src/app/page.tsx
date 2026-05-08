@@ -3,36 +3,57 @@
 import { useState, useRef, useEffect, FormEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Send,
   Bot,
   User,
   Loader2,
-  Trash2,
-  MessageSquare,
+  Star,
+  RotateCcw,
+  CheckCircle2,
+  MessageSquareHeart,
 } from "lucide-react";
 
 interface Message {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "bot";
   content: string;
 }
+
+type FlowStep =
+  | "INIT"
+  | "ASK_RATING"
+  | "RATING_INVALID"
+  | "ASK_FEEDBACK"
+  | "FEEDBACK_INVALID"
+  | "EMAIL_SENT"
+  | "EMAIL_FAILED"
+  | "THANK_YOU"
+  | "DONE";
 
 export default function Home() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [currentStep, setCurrentStep] = useState<FlowStep>("INIT");
+  const [sessionId] = useState(() => crypto.randomUUID());
+  const [rating, setRating] = useState<number | null>(null);
+  const [emailSent, setEmailSent] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
 
-  // Auto-scroll to bottom on new messages
+  // Start the conversation on mount
+  useEffect(() => {
+    startConversation();
+  }, []);
+
+  // Auto-scroll to bottom
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
-  }, [messages]);
+  }, [messages, isLoading]);
 
   // Auto-resize textarea
   useEffect(() => {
@@ -42,111 +63,60 @@ export default function Home() {
     }
   }, [input]);
 
+  const addMessage = (role: "user" | "bot", content: string) => {
+    setMessages((prev) => [
+      ...prev,
+      { id: crypto.randomUUID(), role, content },
+    ]);
+  };
+
+  const startConversation = async () => {
+    setIsLoading(true);
+    try {
+      const res = await fetch("/api/feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId, userInput: "", currentStep: "INIT" }),
+      });
+      const data = await res.json();
+      if (data.botMessage) addMessage("bot", data.botMessage);
+      setCurrentStep(data.nextStep || "ASK_RATING");
+      setRating(data.rating ?? null);
+      setEmailSent(data.emailSent ?? false);
+    } catch {
+      addMessage("bot", "Failed to start the survey. Please refresh the page.");
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleSubmit = async (e?: FormEvent) => {
     e?.preventDefault();
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
 
-    const userMessage: Message = {
-      id: crypto.randomUUID(),
-      role: "user",
-      content: trimmed,
-    };
-
-    const assistantMessage: Message = {
-      id: crypto.randomUUID(),
-      role: "assistant",
-      content: "",
-    };
-
-    setMessages((prev) => [...prev, userMessage, assistantMessage]);
+    addMessage("user", trimmed);
     setInput("");
     setIsLoading(true);
 
-    // Reset textarea height
     if (textareaRef.current) {
       textareaRef.current.style.height = "auto";
     }
 
     try {
-      const apiMessages = [...messages, userMessage].map((m) => ({
-        role: m.role,
-        content: m.content,
-      }));
-
-      const response = await fetch("/api/chat", {
+      const res = await fetch("/api/feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messages: apiMessages }),
+        body: JSON.stringify({ sessionId, userInput: trimmed, currentStep }),
       });
+      const data = await res.json();
 
-      if (!response.ok) {
-        const errorData = await response.json();
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMessage.id
-              ? { ...m, content: `Error: ${errorData.error || "Failed to get response"}` }
-              : m
-          )
-        );
-        setIsLoading(false);
-        return;
-      }
-
-      const reader = response.body?.getReader();
-      if (!reader) {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === assistantMessage.id
-              ? { ...m, content: "Error: No response stream" }
-              : m
-          )
-        );
-        setIsLoading(false);
-        return;
-      }
-
-      const decoder = new TextDecoder();
-      let accumulatedContent = "";
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split("\n");
-
-        for (const line of lines) {
-          const trimmedLine = line.trim();
-          if (trimmedLine === "" || trimmedLine === "data: [DONE]") continue;
-          if (!trimmedLine.startsWith("data: ")) continue;
-
-          try {
-            const json = JSON.parse(trimmedLine.slice(6));
-            if (json.content) {
-              accumulatedContent += json.content;
-              const currentContent = accumulatedContent;
-              setMessages((prev) =>
-                prev.map((m) =>
-                  m.id === assistantMessage.id
-                    ? { ...m, content: currentContent }
-                    : m
-                )
-              );
-            }
-          } catch {
-            // Skip malformed JSON
-          }
-        }
-      }
+      if (data.botMessage) addMessage("bot", data.botMessage);
+      setCurrentStep(data.nextStep || currentStep);
+      setRating(data.rating ?? rating);
+      setEmailSent(data.emailSent ?? false);
     } catch {
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === assistantMessage.id
-            ? { ...m, content: "Error: Failed to connect to the server" }
-            : m
-        )
-      );
+      addMessage("bot", "Something went wrong. Please try again.");
     } finally {
       setIsLoading(false);
     }
@@ -155,14 +125,37 @@ export default function Home() {
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      handleSubmit(e);
+      handleSubmit();
     }
   };
 
-  const clearChat = () => {
+  const restartSurvey = () => {
     setMessages([]);
     setInput("");
+    setCurrentStep("INIT");
+    setRating(null);
+    setEmailSent(false);
+    startConversation();
   };
+
+  // Determine placeholder based on step
+  const getPlaceholder = () => {
+    if (isLoading) return "Please wait...";
+    switch (currentStep) {
+      case "ASK_RATING":
+      case "RATING_INVALID":
+        return "Enter a number from 1 to 10";
+      case "ASK_FEEDBACK":
+      case "FEEDBACK_INVALID":
+        return "Tell us about your experience...";
+      case "DONE":
+        return "Survey complete. Refresh to restart.";
+      default:
+        return "Type your response...";
+    }
+  };
+
+  const isInputDisabled = isLoading || currentStep === "DONE";
 
   return (
     <div className="flex flex-col h-screen bg-background">
@@ -170,123 +163,162 @@ export default function Home() {
       <header className="flex items-center justify-between px-4 sm:px-6 py-4 border-b border-border bg-card">
         <div className="flex items-center gap-3">
           <div className="flex items-center justify-center w-10 h-10 rounded-xl bg-primary text-primary-foreground">
-            <Bot className="w-5 h-5" />
+            <Star className="w-5 h-5" />
           </div>
           <div>
-            <h1 className="text-lg font-semibold text-foreground">Chatbot</h1>
+            <h1 className="text-lg font-semibold text-foreground">
+              GEM Feedback
+            </h1>
             <p className="text-xs text-muted-foreground">
-              Powered by GLM-4.5-Air via OpenRouter
+              Your experience matters to us
             </p>
           </div>
         </div>
-        {messages.length > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={clearChat}
-            className="text-muted-foreground hover:text-destructive"
-          >
-            <Trash2 className="w-4 h-4 mr-1" />
-            Clear
-          </Button>
-        )}
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={restartSurvey}
+          className="text-muted-foreground hover:text-foreground"
+        >
+          <RotateCcw className="w-4 h-4 mr-1" />
+          Restart
+        </Button>
       </header>
+
+      {/* Progress Indicator */}
+      <div className="px-4 sm:px-6 py-3 border-b border-border bg-card/50">
+        <div className="flex items-center gap-2 max-w-3xl mx-auto">
+          {[
+            { label: "Rating", step: "ASK_RATING", icon: Star },
+            { label: "Feedback", step: "ASK_FEEDBACK", icon: MessageSquareHeart },
+            { label: "Done", step: "DONE", icon: CheckCircle2 },
+          ].map((phase, i) => {
+            const stepOrder = ["ASK_RATING", "RATING_INVALID", "ASK_FEEDBACK", "FEEDBACK_INVALID", "DONE", "THANK_YOU", "EMAIL_SENT", "EMAIL_FAILED"];
+            const currentIdx = stepOrder.indexOf(currentStep);
+            const phaseIdx = stepOrder.indexOf(phase.step);
+            const isActive =
+              phase.step === "ASK_RATING"
+                ? currentIdx <= 1
+                : phase.step === "ASK_FEEDBACK"
+                  ? currentIdx >= 2 && currentIdx <= 3
+                  : currentIdx >= 4;
+            const isComplete =
+              phase.step === "ASK_RATING"
+                ? currentIdx >= 2
+                : phase.step === "ASK_FEEDBACK"
+                  ? currentIdx >= 4
+                  : false;
+
+            return (
+              <div key={phase.label} className="flex items-center gap-2 flex-1">
+                <div
+                  className={`flex items-center justify-center w-7 h-7 rounded-full text-xs font-medium transition-colors ${
+                    isComplete
+                      ? "bg-green-500 text-white"
+                      : isActive
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {isComplete ? (
+                    <CheckCircle2 className="w-4 h-4" />
+                  ) : (
+                    <phase.icon className="w-3.5 h-3.5" />
+                  )}
+                </div>
+                <span
+                  className={`text-xs font-medium hidden sm:inline ${
+                    isActive || isComplete
+                      ? "text-foreground"
+                      : "text-muted-foreground"
+                  }`}
+                >
+                  {phase.label}
+                </span>
+                {i < 2 && (
+                  <div
+                    className={`flex-1 h-px ${
+                      isComplete ? "bg-green-500" : "bg-border"
+                    }`}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
 
       {/* Chat Messages */}
       <div
         ref={scrollRef}
         className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 space-y-6"
       >
-        {messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
-            <div className="flex items-center justify-center w-16 h-16 rounded-2xl bg-muted">
-              <MessageSquare className="w-8 h-8 text-muted-foreground" />
-            </div>
-            <div>
-              <h2 className="text-xl font-semibold text-foreground mb-2">
-                Start a Conversation
-              </h2>
-              <p className="text-sm text-muted-foreground max-w-md">
-                Type a message below to begin chatting with GLM-4.5-Air. 
-                The AI model is hosted on OpenRouter and responds in real-time with streaming.
-              </p>
-            </div>
-            <div className="flex flex-wrap justify-center gap-2 mt-4">
-              {[
-                "Tell me a fun fact",
-                "Explain quantum computing",
-                "Write a haiku about coding",
-                "Help me with a recipe",
-              ].map((suggestion) => (
-                <button
-                  key={suggestion}
-                  disabled={isLoading}
-                  onClick={() => {
-                    setInput(suggestion);
-                    // Use setTimeout to ensure state updates before submitting
-                    setTimeout(() => {
-                      formRef.current?.requestSubmit();
-                    }, 0);
-                  }}
-                  className="px-4 py-2 text-sm rounded-full border border-border bg-card text-foreground hover:bg-accent transition-colors"
-                >
-                  {suggestion}
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          messages.map((message) => (
+        {messages.map((message) => (
+          <div
+            key={message.id}
+            className={`flex gap-3 ${
+              message.role === "user" ? "justify-end" : "justify-start"
+            }`}
+          >
+            {message.role === "bot" && (
+              <div className="flex-shrink-0 flex items-start pt-1">
+                <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary text-primary-foreground">
+                  <Bot className="w-4 h-4" />
+                </div>
+              </div>
+            )}
             <div
-              key={message.id}
-              className={`flex gap-3 ${
-                message.role === "user" ? "justify-end" : "justify-start"
+              className={`max-w-[80%] sm:max-w-[70%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
+                message.role === "user"
+                  ? "bg-primary text-primary-foreground rounded-br-md"
+                  : "bg-muted text-foreground rounded-bl-md"
               }`}
             >
-              {message.role === "assistant" && (
-                <div className="flex-shrink-0 flex items-start pt-1">
-                  <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary text-primary-foreground">
-                    <Bot className="w-4 h-4" />
-                  </div>
-                </div>
-              )}
-              <div
-                className={`max-w-[80%] sm:max-w-[70%] rounded-2xl px-4 py-3 text-sm leading-relaxed whitespace-pre-wrap ${
-                  message.role === "user"
-                    ? "bg-primary text-primary-foreground rounded-br-md"
-                    : "bg-muted text-foreground rounded-bl-md"
-                }`}
-              >
-                {message.content || (
-                  <span className="flex items-center gap-2 text-muted-foreground">
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    Thinking...
-                  </span>
-                )}
-              </div>
-              {message.role === "user" && (
-                <div className="flex-shrink-0 flex items-start pt-1">
-                  <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-secondary text-secondary-foreground">
-                    <User className="w-4 h-4" />
-                  </div>
-                </div>
-              )}
+              {message.content}
             </div>
-          ))
+            {message.role === "user" && (
+              <div className="flex-shrink-0 flex items-start pt-1">
+                <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-secondary text-secondary-foreground">
+                  <User className="w-4 h-4" />
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+
+        {/* Loading indicator */}
+        {isLoading && (
+          <div className="flex gap-3 justify-start">
+            <div className="flex-shrink-0 flex items-start pt-1">
+              <div className="flex items-center justify-center w-8 h-8 rounded-lg bg-primary text-primary-foreground">
+                <Bot className="w-4 h-4" />
+              </div>
+            </div>
+            <div className="bg-muted text-foreground rounded-2xl rounded-bl-md px-4 py-3 text-sm">
+              <span className="flex items-center gap-2 text-muted-foreground">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Processing...
+              </span>
+            </div>
+          </div>
         )}
       </div>
 
       {/* Input Area */}
       <div className="border-t border-border bg-card px-4 sm:px-6 py-4">
-        <form ref={formRef} onSubmit={handleSubmit} className="flex items-end gap-3 max-w-3xl mx-auto">
+        <form
+          ref={formRef}
+          onSubmit={handleSubmit}
+          className="flex items-end gap-3 max-w-3xl mx-auto"
+        >
           <div className="flex-1 relative">
             <Textarea
               ref={textareaRef}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={handleKeyDown}
-              placeholder="Type a message..."
-              disabled={isLoading}
+              placeholder={getPlaceholder()}
+              disabled={isInputDisabled}
               rows={1}
               className="resize-none min-h-[44px] max-h-[160px] pr-3 py-3 text-sm rounded-xl bg-background border-border focus-visible:ring-ring"
             />
@@ -294,18 +326,16 @@ export default function Home() {
           <Button
             type="submit"
             size="icon"
-            disabled={!input.trim() || isLoading}
+            disabled={!input.trim() || isInputDisabled}
             className="flex-shrink-0 rounded-xl w-11 h-11"
           >
-            {isLoading ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Send className="w-4 h-4" />
-            )}
+            <Send className="w-4 h-4" />
           </Button>
         </form>
         <p className="text-xs text-center text-muted-foreground mt-2">
-          Press Enter to send, Shift+Enter for a new line
+          {currentStep === "DONE"
+            ? "Survey complete — thank you!"
+            : "Press Enter to send, Shift+Enter for a new line"}
         </p>
       </div>
     </div>
