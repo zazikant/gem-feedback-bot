@@ -25,6 +25,7 @@ export default function Home() {
   const [isLoading, setIsLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const formRef = useRef<HTMLFormElement>(null);
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -41,8 +42,8 @@ export default function Home() {
     }
   }, [input]);
 
-  const handleSubmit = async (e: FormEvent) => {
-    e.preventDefault();
+  const handleSubmit = async (e?: FormEvent) => {
+    e?.preventDefault();
     const trimmed = input.trim();
     if (!trimmed || isLoading) return;
 
@@ -219,9 +220,13 @@ export default function Home() {
               ].map((suggestion) => (
                 <button
                   key={suggestion}
+                  disabled={isLoading}
                   onClick={() => {
                     setInput(suggestion);
-                    textareaRef.current?.focus();
+                    // Use setTimeout to ensure state updates before submitting
+                    setTimeout(() => {
+                      formRef.current?.requestSubmit();
+                    }, 0);
                   }}
                   className="px-4 py-2 text-sm rounded-full border border-border bg-card text-foreground hover:bg-accent transition-colors"
                 >
@@ -273,7 +278,7 @@ export default function Home() {
 
       {/* Input Area */}
       <div className="border-t border-border bg-card px-4 sm:px-6 py-4">
-        <form onSubmit={handleSubmit} className="flex items-end gap-3 max-w-3xl mx-auto">
+        <form ref={formRef} onSubmit={handleSubmit} className="flex items-end gap-3 max-w-3xl mx-auto">
           <div className="flex-1 relative">
             <Textarea
               ref={textareaRef}
