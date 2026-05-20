@@ -194,13 +194,13 @@ async function captureAndSend(
 }
 
 function thankYou(state: FeedbackStateType): Partial<FeedbackStateType> {
-  const companyMessage = state.company
-    ? `\n\nCompany: ${state.company}`
+  const companyPart = state.company
+    ? ` from ${state.company}`
     : "";
   return {
     step: "DONE",
     botMessage:
-      `Thank you so much for your feedback! Your response has been recorded. We truly appreciate you taking the time to share your experience with GEM.${companyMessage} Have a wonderful day!`,
+      `Thank you so much for your feedback!${companyPart} Your response has been recorded. We truly appreciate you taking the time to share your experience with GEM. Have a wonderful day!`,
   };
 }
 
