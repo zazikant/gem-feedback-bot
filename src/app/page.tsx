@@ -1,6 +1,6 @@
 "use client";
 
-import { Star, RotateCcw, CheckCircle2, Bot, User, Loader2, Send, MessageSquareHeart } from "lucide-react";
+import { Star, RotateCcw, CheckCircle2, Bot, User, Loader2, Send, MessageSquareHeart, Building2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useFeedbackFlow } from "@/hooks/use-feedback-flow";
@@ -20,6 +20,7 @@ export default function Home() {
     restartSurvey,
     getPlaceholder,
     isInputDisabled,
+    isOptionalStep,
   } = useFeedbackFlow();
 
   return (
@@ -56,23 +57,27 @@ export default function Home() {
           {[
             { label: "Rating", step: "ASK_RATING", icon: Star },
             { label: "Feedback", step: "ASK_FEEDBACK", icon: MessageSquareHeart },
+            { label: "Company", step: "ASK_COMPANY", icon: Building2 },
             { label: "Done", step: "DONE", icon: CheckCircle2 },
           ].map((phase, i) => {
-            const stepOrder = ["ASK_RATING", "RATING_INVALID", "ASK_FEEDBACK", "FEEDBACK_INVALID", "DONE", "THANK_YOU", "EMAIL_SENT", "EMAIL_FAILED"];
+            const stepOrder = ["ASK_RATING", "RATING_INVALID", "ASK_FEEDBACK", "FEEDBACK_INVALID", "ASK_COMPANY", "DONE", "THANK_YOU", "EMAIL_SENT", "EMAIL_FAILED"];
             const currentIdx = stepOrder.indexOf(currentStep);
-            const phaseIdx = stepOrder.indexOf(phase.step);
             const isActive =
               phase.step === "ASK_RATING"
                 ? currentIdx <= 1
                 : phase.step === "ASK_FEEDBACK"
                   ? currentIdx >= 2 && currentIdx <= 3
-                  : currentIdx >= 4;
+                  : phase.step === "ASK_COMPANY"
+                    ? currentIdx === 4
+                    : currentIdx >= 5;
             const isComplete =
               phase.step === "ASK_RATING"
                 ? currentIdx >= 2
                 : phase.step === "ASK_FEEDBACK"
                   ? currentIdx >= 4
-                  : false;
+                  : phase.step === "ASK_COMPANY"
+                    ? currentIdx >= 5
+                    : false;
 
             return (
               <div key={phase.label} className="flex items-center gap-2 flex-1">
@@ -100,7 +105,7 @@ export default function Home() {
                 >
                   {phase.label}
                 </span>
-                {i < 2 && (
+                {i < 3 && (
                   <div
                     className={`flex-1 h-px ${
                       isComplete ? "bg-green-500" : "bg-border"
@@ -191,7 +196,7 @@ export default function Home() {
           <Button
             type="submit"
             size="icon"
-            disabled={!input.trim() || isInputDisabled}
+            disabled={(!input.trim() && !isOptionalStep) || isInputDisabled}
             className="flex-shrink-0 rounded-xl w-11 h-11"
           >
             <Send className="w-4 h-4" />
@@ -200,7 +205,9 @@ export default function Home() {
         <p className="text-xs text-center text-muted-foreground mt-2">
           {currentStep === "DONE"
             ? "Survey complete — thank you!"
-            : "Press Enter to send, Shift+Enter for a new line"}
+            : isOptionalStep
+              ? "Press Enter to skip, or type your company name"
+              : "Press Enter to send, Shift+Enter for a new line"}
         </p>
       </div>
     </div>

@@ -6,6 +6,7 @@ export type FlowStep =
   | "RATING_INVALID"
   | "ASK_FEEDBACK"
   | "FEEDBACK_INVALID"
+  | "ASK_COMPANY"
   | "EMAIL_SENT"
   | "EMAIL_FAILED"
   | "THANK_YOU"
@@ -29,6 +30,7 @@ export interface UseFeedbackFlowReturn {
   currentStep: FlowStep;
   rating: number | null;
   emailSent: boolean;
+  company: string;
   formRef: React.RefObject<HTMLFormElement | null>;
   scrollRef: React.RefObject<HTMLDivElement | null>;
   textareaRef: React.RefObject<HTMLTextAreaElement | null>;
@@ -38,6 +40,7 @@ export interface UseFeedbackFlowReturn {
   addMessage: (role: "user" | "bot", content: string) => void;
   getPlaceholder: () => string;
   isInputDisabled: boolean;
+  isOptionalStep: boolean;
 }
 
 export function useFeedbackFlow({ apiUrl = "/api/feedback" }: UseFeedbackFlowOptions = {}): UseFeedbackFlowReturn {
@@ -48,6 +51,7 @@ export function useFeedbackFlow({ apiUrl = "/api/feedback" }: UseFeedbackFlowOpt
   const [sessionId] = useState(() => crypto.randomUUID());
   const [rating, setRating] = useState<number | null>(null);
   const [emailSent, setEmailSent] = useState(false);
+  const [company, setCompany] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -73,8 +77,7 @@ export function useFeedbackFlow({ apiUrl = "/api/feedback" }: UseFeedbackFlowOpt
       setCurrentStep(data.nextStep || "ASK_RATING");
       setRating(data.rating ?? null);
       setEmailSent(data.emailSent ?? false);
-    } catch {
-      addMessage("bot", "Failed to start the survey. Please refresh the page.");
+      setCompany(data.company ?? "");
     } finally {
       setIsLoading(false);
     }
@@ -103,7 +106,8 @@ export function useFeedbackFlow({ apiUrl = "/api/feedback" }: UseFeedbackFlowOpt
   const handleSubmit = useCallback(async (e?: FormEvent) => {
     e?.preventDefault();
     const trimmed = input.trim();
-    if (!trimmed || isLoading) return;
+    const isOptionalStep = currentStep === "ASK_COMPANY";
+    if ((!trimmed && !isOptionalStep) || isLoading) return;
 
     addMessage("user", trimmed);
     setInput("");
@@ -126,8 +130,7 @@ export function useFeedbackFlow({ apiUrl = "/api/feedback" }: UseFeedbackFlowOpt
       setCurrentStep(data.nextStep || currentStep);
       setRating(data.rating ?? rating);
       setEmailSent(data.emailSent ?? false);
-    } catch {
-      addMessage("bot", "Something went wrong. Please try again.");
+      setCompany(data.company ?? company);
     } finally {
       setIsLoading(false);
     }
@@ -146,7 +149,7 @@ export function useFeedbackFlow({ apiUrl = "/api/feedback" }: UseFeedbackFlowOpt
     setCurrentStep("INIT");
     setRating(null);
     setEmailSent(false);
-    startConversation();
+    setCompany("");
   }, [startConversation]);
 
   const getPlaceholder = useCallback(() => {
@@ -158,6 +161,8 @@ export function useFeedbackFlow({ apiUrl = "/api/feedback" }: UseFeedbackFlowOpt
       case "ASK_FEEDBACK":
       case "FEEDBACK_INVALID":
         return "Tell us about your experience...";
+      case "ASK_COMPANY":
+        return "Your company name (optional — press Enter to skip)";
       case "DONE":
         return "Survey complete. Refresh to restart.";
       default:
@@ -175,6 +180,7 @@ export function useFeedbackFlow({ apiUrl = "/api/feedback" }: UseFeedbackFlowOpt
     currentStep,
     rating,
     emailSent,
+    company,
     formRef,
     scrollRef,
     textareaRef,
@@ -184,5 +190,6 @@ export function useFeedbackFlow({ apiUrl = "/api/feedback" }: UseFeedbackFlowOpt
     addMessage,
     getPlaceholder,
     isInputDisabled,
+    isOptionalStep: currentStep === "ASK_COMPANY",
   };
 }

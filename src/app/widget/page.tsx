@@ -1,6 +1,6 @@
 "use client";
 
-import { Star, RotateCcw, CheckCircle2, Bot, User, Loader2, Send } from "lucide-react";
+import { Star, RotateCcw, CheckCircle2, Bot, User, Loader2, Send, Building2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { useFeedbackFlow } from "@/hooks/use-feedback-flow";
@@ -20,6 +20,7 @@ export default function WidgetPage() {
     restartSurvey,
     getPlaceholder,
     isInputDisabled,
+    isOptionalStep,
   } = useFeedbackFlow();
 
   return (
@@ -53,15 +54,18 @@ export default function WidgetPage() {
         {[
           { label: "Rate", icon: Star },
           { label: "Feedback", icon: CheckCircle2 },
+          { label: "Company", icon: Building2 },
           { label: "Done", icon: CheckCircle2 },
         ].map((phase, i) => {
           const isComplete =
-            (i === 0 && ["ASK_FEEDBACK", "FEEDBACK_INVALID", "DONE"].includes(currentStep)) ||
-            (i === 1 && currentStep === "DONE") ||
-            (i === 2 && currentStep === "DONE");
+            (i === 0 && ["ASK_FEEDBACK", "FEEDBACK_INVALID", "ASK_COMPANY", "DONE", "THANK_YOU", "EMAIL_SENT", "EMAIL_FAILED"].includes(currentStep)) ||
+            (i === 1 && ["ASK_COMPANY", "DONE", "THANK_YOU", "EMAIL_SENT", "EMAIL_FAILED"].includes(currentStep)) ||
+            (i === 2 && currentStep === "DONE") ||
+            (i === 3 && currentStep === "DONE");
           const isActive =
             (i === 0 && ["ASK_RATING", "RATING_INVALID"].includes(currentStep)) ||
-            (i === 1 && ["ASK_FEEDBACK", "FEEDBACK_INVALID"].includes(currentStep));
+            (i === 1 && ["ASK_FEEDBACK", "FEEDBACK_INVALID"].includes(currentStep)) ||
+            (i === 2 && currentStep === "ASK_COMPANY");
 
           return (
             <div key={phase.label} className="flex items-center gap-1 flex-1">
@@ -79,7 +83,7 @@ export default function WidgetPage() {
               <span className={`text-[10px] ${isComplete || isActive ? "text-gray-800" : "text-gray-400"}`}>
                 {phase.label}
               </span>
-              {i < 2 && <div className={`flex-1 h-px ${isComplete ? "bg-green-500" : "bg-gray-200"}`} />}
+              {i < 3 && <div className={`flex-1 h-px ${isComplete ? "bg-green-500" : "bg-gray-200"}`} />}
             </div>
           );
         })}
@@ -147,7 +151,7 @@ export default function WidgetPage() {
           <Button
             type="submit"
             size="icon"
-            disabled={!input.trim() || isInputDisabled}
+            disabled={(!input.trim() && !isOptionalStep) || isInputDisabled}
             className="flex-shrink-0 rounded-lg w-9 h-9 bg-[#1a1a2e] hover:bg-[#2a2a4e]"
           >
             <Send className="w-3.5 h-3.5" />

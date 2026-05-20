@@ -12,7 +12,7 @@ import { runFeedbackStep } from "@/lib/feedback/graph";
  *                    └──→ ASK_RATING (loop)        ←──────────┘
  *
  * Client sends: { sessionId, userInput, currentStep }
- * Server returns: { botMessage, nextStep, rating, emailSent }
+ * Server returns: { botMessage, nextStep, rating, emailSent, company }
  */
 
 export async function POST(req: NextRequest) {
@@ -38,6 +38,7 @@ export async function POST(req: NextRequest) {
         nextStep: "ASK_RATING",
         rating: null,
         emailSent: false,
+        company: "",
       },
       { status: 500 }
     );

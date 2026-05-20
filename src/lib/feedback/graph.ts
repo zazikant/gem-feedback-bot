@@ -7,7 +7,8 @@
  *
  * Flow: START → askRating ──(conditional)──→ [validateRating | askRating (re-ask)]
  *        validateRating ──(conditional)──→ [askFeedback | askRating (invalid)]
- *        askFeedback ──(conditional)──→ [captureAndSend | askFeedback (re-ask)]
+ *        askFeedback ──(conditional)──→ [askCompany | askFeedback (re-ask)]
+ *        askCompany ──(always)──→ captureAndSend
  *        captureAndSend ──(conditional)──→ [thankYou | askFeedback (re-ask) | askRating (email fail)]
  *        thankYou → END
  */
@@ -22,6 +23,7 @@ const FeedbackState = Annotation.Root({
   userInput: Annotation<string>,
   rating: Annotation<number | null>,
   feedback: Annotation<string>,
+  company: Annotation<string>,
   botMessage: Annotation<string>,
   error: Annotation<string>,
   emailSent: Annotation<boolean>,
@@ -43,14 +45,14 @@ function routeFromValidateRating(state: FeedbackStateType): "askFeedback" | "ask
   if (state.step === "RATING_INVALID") {
     return "askRating";
   }
-  return "askFeedback";
+  return "askingFeedback";
 }
 
-function routeFromAskFeedback(state: FeedbackStateType): "captureAndSend" | "askFeedback" {
+function routeFromAskFeedback(state: FeedbackStateType): "askCompany" | "askFeedback" {
   if (state.step === "FEEDBACK_INVALID") {
     return "askFeedback";
   }
-  return "captureAndSend";
+  return "askCompany";
 }
 
 function routeFromCaptureAndSend(state: FeedbackStateType): "thankYou" | "askFeedback" | "askRating" {
@@ -74,6 +76,7 @@ function askRating(state: FeedbackStateType): Partial<FeedbackStateType> {
       error: "INVALID_RATING",
       rating: null,
       feedback: "",
+      company: "",
       emailSent: false,
     };
   }
@@ -86,6 +89,7 @@ function askRating(state: FeedbackStateType): Partial<FeedbackStateType> {
       error: "",
       rating: null,
       feedback: "",
+      company: "",
       emailSent: false,
     };
   }
@@ -96,6 +100,7 @@ function askRating(state: FeedbackStateType): Partial<FeedbackStateType> {
       "How would you rate your overall experience with GEM? Rate from 1 to 10.",
     rating: null,
     feedback: "",
+    company: "",
     error: "",
     emailSent: false,
   };
@@ -137,12 +142,25 @@ function askFeedback(state: FeedbackStateType): Partial<FeedbackStateType> {
   };
 }
 
+function askCompany(state: FeedbackStateType): Partial<FeedbackStateType> {
+  return {
+    step: "ASK_COMPANY",
+    botMessage: "Would you like to share your company name? This is optional — you can press Enter to skip.",
+    error: "",
+  };
+}
+
 async function captureAndSend(
   state: FeedbackStateType
 ): Promise<Partial<FeedbackStateType>> {
   const feedback = (state.userInput || "").trim();
 
-  if (!feedback || feedback.length < 10) {
+  // This node runs twice: once after askFeedback (capturing feedback text),
+  // once after askCompany (capturing company name). We need to determine context.
+  // When called from askCompany path, the feedback is already in state.
+  // When called from askFeedback path, we capture the feedback text.
+
+  if (!state.feedback && (!feedback || feedback.length < 10)) {
     return {
       step: "FEEDBACK_INVALID",
       error: "INVALID_FEEDBACK",
@@ -150,9 +168,13 @@ async function captureAndSend(
     };
   }
 
+  const finalFeedback = state.feedback || feedback;
+  const company = state.company || "";
+
   const payload = {
     rating: state.rating,
-    feedback,
+    feedback: finalFeedback,
+    company: company || "Not provided",
     timestamp: new Date().toISOString(),
     source: "GEM Feedback Bot",
   };
@@ -161,7 +183,8 @@ async function captureAndSend(
     await sendFeedbackEmail(payload);
     return {
       step: "EMAIL_SENT",
-      feedback,
+      feedback: finalFeedback,
+      company,
       emailSent: true,
       error: "",
     };
@@ -177,10 +200,13 @@ async function captureAndSend(
 }
 
 function thankYou(state: FeedbackStateType): Partial<FeedbackStateType> {
+  const companyMessage = state.company
+    ? `\n\nCompany: ${state.company}`
+    : "";
   return {
     step: "DONE",
     botMessage:
-      "Thank you so much for your feedback! Your response has been recorded. We truly appreciate you taking the time to share your experience with GEM. Have a wonderful day!",
+      `Thank you so much for your feedback! Your response has been recorded. We truly appreciate you taking the time to share your experience with GEM.${companyMessage} Have a wonderful day!`,
   };
 }
 
@@ -190,6 +216,7 @@ const workflow = new StateGraph(FeedbackState)
   .addNode("askRating", askRating)
   .addNode("validateRating", validateRating)
   .addNode("askFeedback", askFeedback)
+  .addNode("askCompany", askCompany)
   .addNode("captureAndSend", captureAndSend)
   .addNode("thankYou", thankYou)
 
@@ -203,14 +230,16 @@ const workflow = new StateGraph(FeedbackState)
   .addEdge("askRating", "validateRating")
 
   .addConditionalEdges("validateRating", routeFromValidateRating, {
-    askFeedback: "askFeedback",
+    askingFeedback: "askFeedback",
     askRating: "askRating",
   })
 
   .addConditionalEdges("askFeedback", routeFromAskFeedback, {
-    captureAndSend: "captureAndSend",
+    askCompany: "askCompany",
     askFeedback: "askFeedback",
   })
+
+  .addEdge("askCompany", "captureAndSend")
 
   .addConditionalEdges("captureAndSend", routeFromCaptureAndSend, {
     thankYou: "thankYou",
@@ -229,7 +258,7 @@ export async function runFeedbackStep(
   sessionId: string,
   userInput: string,
   currentStep: string
-): Promise<{ botMessage: string; nextStep: string; rating: number | null; emailSent: boolean }> {
+): Promise<{ botMessage: string; nextStep: string; rating: number | null; emailSent: boolean; company: string }> {
 
   const threadConfig = { configurable: { thread_id: sessionId } };
 
@@ -240,6 +269,7 @@ export async function runFeedbackStep(
         userInput: "",
         rating: null,
         feedback: "",
+        company: "",
         botMessage: "",
         error: "",
         emailSent: false,
@@ -253,11 +283,37 @@ export async function runFeedbackStep(
       nextStep: result.step,
       rating: result.rating ?? null,
       emailSent: result.emailSent ?? false,
+      company: result.company ?? "",
     };
   }
 
-  // For subsequent steps, feed user input into the graph
-  // The graph's conditional edges handle routing based on state
+  if (currentStep === "ASK_COMPANY") {
+    const company = userInput.trim();
+
+    const result = await feedbackGraph.invoke(
+      {
+        step: "ASK_COMPANY",
+        userInput: company,
+        rating: null,
+        feedback: "",
+        company: company,
+        botMessage: "",
+        error: "",
+        emailSent: false,
+        retryCount: 0,
+      },
+      threadConfig
+    );
+
+    return {
+      botMessage: result.botMessage,
+      nextStep: result.step,
+      rating: result.rating ?? null,
+      emailSent: result.emailSent ?? false,
+      company: company,
+    };
+  }
+
   const stepMap: Record<string, string> = {
     ASK_RATING: "validateRating",
     RATING_INVALID: "validateRating",
@@ -265,7 +321,7 @@ export async function runFeedbackStep(
     FEEDBACK_INVALID: "captureAndSend",
   };
 
-  const nextGraphStep = stepMap[currentStep] || "askRating";
+  const graphStep = stepMap[currentStep] || "askRating";
 
   const result = await feedbackGraph.invoke(
     {
@@ -273,6 +329,7 @@ export async function runFeedbackStep(
       userInput,
       rating: null,
       feedback: "",
+      company: "",
       botMessage: "",
       error: "",
       emailSent: false,
@@ -286,5 +343,6 @@ export async function runFeedbackStep(
     nextStep: result.step,
     rating: result.rating ?? null,
     emailSent: result.emailSent ?? false,
+    company: result.company ?? "",
   };
 }

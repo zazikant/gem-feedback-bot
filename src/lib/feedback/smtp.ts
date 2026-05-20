@@ -10,6 +10,7 @@ import nodemailer from "nodemailer";
 interface FeedbackPayload {
   rating: number | null;
   feedback: string;
+  company: string;
   timestamp: string;
   source: string;
 }
@@ -64,6 +65,10 @@ export async function sendFeedbackEmail(payload: FeedbackPayload): Promise<boole
         <tr>
           <td style="padding: 8px 12px; border: 1px solid #e0e0e0; font-weight: bold; background: #f5f5f5;">Rating</td>
           <td style="padding: 8px 12px; border: 1px solid #e0e0e0;">${payload.rating}/10</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 12px; border: 1px solid #e0e0e0; font-weight: bold; background: #f5f5f5;">Company</td>
+          <td style="padding: 8px 12px; border: 1px solid #e0e0e0;">${payload.company}</td>
         </tr>
         <tr>
           <td style="padding: 8px 12px; border: 1px solid #e0e0e0; font-weight: bold; background: #f5f5f5;">Feedback</td>
