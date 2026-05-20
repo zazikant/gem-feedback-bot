@@ -1,13 +1,15 @@
 /**
  * LangGraph-based Feedback Flow
  *
- * Uses LangGraph's StateGraph with a router-based pattern.
- * All nodes are reachable via the router, satisfying LangGraph's validation.
+ * Uses LangGraph's StateGraph with proper conditional edges.
+ * The graph is self-contained: each node transitions to the next
+ * based on state, with no external executor loop required.
  *
- * Graph: START → router ──(conditional)──→ [askRating | validateRating | askFeedback | captureAndSend | thankYou] → END
- *
- * The router reads the current step from state and dispatches to the right node.
- * Each invocation runs: router → one node → END.
+ * Flow: START → askRating ──(conditional)──→ [validateRating | askRating (re-ask)]
+ *        validateRating ──(conditional)──→ [askFeedback | askRating (invalid)]
+ *        askFeedback ──(conditional)──→ [captureAndSend | askFeedback (re-ask)]
+ *        captureAndSend ──(conditional)──→ [thankYou | askFeedback (re-ask) | askRating (email fail)]
+ *        thankYou → END
  */
 
 import { Annotation, StateGraph, END, START, MemorySaver } from "@langchain/langgraph";
@@ -28,33 +30,37 @@ const FeedbackState = Annotation.Root({
 
 export type FeedbackStateType = typeof FeedbackState.State;
 
-// ─── Router ─────────────────────────────────────────────────────────────────
+// ─── Conditional Routing Functions ────────────────────────────────────────────
 
-function router(_state: FeedbackStateType): Partial<FeedbackStateType> {
-  return {}; // Pass-through
+function routeFromAskRating(state: FeedbackStateType): "validateRating" | "askRating" {
+  if (state.step === "INIT" || state.step === "EMAIL_FAILED") {
+    return "askRating";
+  }
+  return "validateRating";
 }
 
-function routeFromRouter(
-  state: FeedbackStateType
-): "askRating" | "validateRating" | "askFeedback" | "captureAndSend" | "thankYou" {
-  switch (state.step) {
-    case "INIT":
-    case "RATING_INVALID":
-    case "EMAIL_FAILED":
-      return "askRating";
-    case "VALIDATE_RATING":
-      return "validateRating";
-    case "RATING_VALID":
-    case "FEEDBACK_INVALID":
-      return "askFeedback";
-    case "CAPTURE_FEEDBACK":
-      return "captureAndSend";
-    case "EMAIL_SENT":
-    case "DONE":
-      return "thankYou";
-    default:
-      return "askRating";
+function routeFromValidateRating(state: FeedbackStateType): "askFeedback" | "askRating" {
+  if (state.step === "RATING_INVALID") {
+    return "askRating";
   }
+  return "askFeedback";
+}
+
+function routeFromAskFeedback(state: FeedbackStateType): "captureAndSend" | "askFeedback" {
+  if (state.step === "FEEDBACK_INVALID") {
+    return "askFeedback";
+  }
+  return "captureAndSend";
+}
+
+function routeFromCaptureAndSend(state: FeedbackStateType): "thankYou" | "askFeedback" | "askRating" {
+  if (state.step === "FEEDBACK_INVALID") {
+    return "askFeedback";
+  }
+  if (state.step === "EMAIL_FAILED") {
+    return "askRating";
+  }
+  return "thankYou";
 }
 
 // ─── Graph Nodes ────────────────────────────────────────────────────────────
@@ -62,7 +68,7 @@ function routeFromRouter(
 function askRating(state: FeedbackStateType): Partial<FeedbackStateType> {
   if (state.step === "RATING_INVALID") {
     return {
-      step: "ASK_RATING",
+      step: "RATING_INVALID",
       botMessage:
         "That doesn't look like a valid rating. Please enter a whole number between 1 and 10.",
       error: "INVALID_RATING",
@@ -74,7 +80,7 @@ function askRating(state: FeedbackStateType): Partial<FeedbackStateType> {
 
   if (state.step === "EMAIL_FAILED") {
     return {
-      step: "ASK_RATING",
+      step: "EMAIL_FAILED",
       botMessage:
         "Sorry, there was an error submitting your feedback. Let's start over.\n\nHow would you rate your overall experience with GEM? Rate from 1 to 10.",
       error: "",
@@ -84,7 +90,6 @@ function askRating(state: FeedbackStateType): Partial<FeedbackStateType> {
     };
   }
 
-  // INIT or fresh start
   return {
     step: "ASK_RATING",
     botMessage:
@@ -118,7 +123,7 @@ function validateRating(state: FeedbackStateType): Partial<FeedbackStateType> {
 function askFeedback(state: FeedbackStateType): Partial<FeedbackStateType> {
   if (state.step === "FEEDBACK_INVALID") {
     return {
-      step: "ASK_FEEDBACK",
+      step: "FEEDBACK_INVALID",
       botMessage:
         "It looks like your feedback was too short. Could you please share a bit more about your experience?",
       error: "INVALID_FEEDBACK",
@@ -182,27 +187,37 @@ function thankYou(state: FeedbackStateType): Partial<FeedbackStateType> {
 // ─── Build the Graph ────────────────────────────────────────────────────────
 
 const workflow = new StateGraph(FeedbackState)
-  .addNode("router", router)
   .addNode("askRating", askRating)
   .addNode("validateRating", validateRating)
   .addNode("askFeedback", askFeedback)
   .addNode("captureAndSend", captureAndSend)
   .addNode("thankYou", thankYou)
 
-  .addEdge(START, "router")
+  .addEdge(START, "askRating")
 
-  .addConditionalEdges("router", routeFromRouter, {
-    askRating: "askRating",
+  .addConditionalEdges("askRating", routeFromAskRating, {
     validateRating: "validateRating",
-    askFeedback: "askFeedback",
-    captureAndSend: "captureAndSend",
-    thankYou: "thankYou",
+    askRating: "askRating",
   })
 
-  .addEdge("askRating", END)
-  .addEdge("validateRating", END)
-  .addEdge("askFeedback", END)
-  .addEdge("captureAndSend", END)
+  .addEdge("askRating", "validateRating")
+
+  .addConditionalEdges("validateRating", routeFromValidateRating, {
+    askFeedback: "askFeedback",
+    askRating: "askRating",
+  })
+
+  .addConditionalEdges("askFeedback", routeFromAskFeedback, {
+    captureAndSend: "captureAndSend",
+    askFeedback: "askFeedback",
+  })
+
+  .addConditionalEdges("captureAndSend", routeFromCaptureAndSend, {
+    thankYou: "thankYou",
+    askFeedback: "askFeedback",
+    askRating: "askRating",
+  })
+
   .addEdge("thankYou", END);
 
 const checkpointer = new MemorySaver();
@@ -210,16 +225,14 @@ export const feedbackGraph = workflow.compile({ checkpointer });
 
 // ─── Step-based Executor ────────────────────────────────────────────────────
 
-// In-memory state store for cross-request persistence
-const stateStore = new Map<string, Partial<FeedbackStateType>>();
-
 export async function runFeedbackStep(
   sessionId: string,
   userInput: string,
   currentStep: string
 ): Promise<{ botMessage: string; nextStep: string; rating: number | null; emailSent: boolean }> {
 
-  // ─── INIT ────────────────────────────────────────────────────────────
+  const threadConfig = { configurable: { thread_id: sessionId } };
+
   if (currentStep === "INIT") {
     const result = await feedbackGraph.invoke(
       {
@@ -232,10 +245,8 @@ export async function runFeedbackStep(
         emailSent: false,
         retryCount: 0,
       },
-      { configurable: { thread_id: sessionId } }
+      threadConfig
     );
-
-    stateStore.set(sessionId, result);
 
     return {
       botMessage: result.botMessage,
@@ -245,170 +256,35 @@ export async function runFeedbackStep(
     };
   }
 
-  // ─── ASK_RATING: User submitted a rating ────────────────────────────
-  if (currentStep === "ASK_RATING" || currentStep === "RATING_INVALID") {
-    // Run validateRating via the graph
-    const result = await feedbackGraph.invoke(
-      {
-        step: "VALIDATE_RATING",
-        userInput,
-        rating: null,
-        feedback: "",
-        botMessage: "",
-        error: "",
-        emailSent: false,
-        retryCount: 0,
-      },
-      { configurable: { thread_id: `${sessionId}-validate` } }
-    );
+  // For subsequent steps, feed user input into the graph
+  // The graph's conditional edges handle routing based on state
+  const stepMap: Record<string, string> = {
+    ASK_RATING: "validateRating",
+    RATING_INVALID: "validateRating",
+    ASK_FEEDBACK: "captureAndSend",
+    FEEDBACK_INVALID: "captureAndSend",
+  };
 
-    if (result.step === "RATING_INVALID") {
-      // Re-ask with error
-      const askResult = await feedbackGraph.invoke(
-        {
-          step: "RATING_INVALID",
-          userInput: "",
-          rating: null,
-          feedback: "",
-          botMessage: "",
-          error: "INVALID_RATING",
-          emailSent: false,
-          retryCount: 0,
-        },
-        { configurable: { thread_id: `${sessionId}-reask` } }
-      );
+  const nextGraphStep = stepMap[currentStep] || "askRating";
 
-      return {
-        botMessage: askResult.botMessage,
-        nextStep: "ASK_RATING",
-        rating: null,
-        emailSent: false,
-      };
-    }
-
-    // Valid — store rating and proceed to askFeedback
-    stateStore.set(sessionId, { rating: result.rating });
-
-    const feedbackResult = await feedbackGraph.invoke(
-      {
-        step: "RATING_VALID",
-        userInput: "",
-        rating: result.rating,
-        feedback: "",
-        botMessage: "",
-        error: "",
-        emailSent: false,
-        retryCount: 0,
-      },
-      { configurable: { thread_id: `${sessionId}-askfeedback` } }
-    );
-
-    return {
-      botMessage: feedbackResult.botMessage,
-      nextStep: "ASK_FEEDBACK",
-      rating: result.rating ?? null,
+  const result = await feedbackGraph.invoke(
+    {
+      step: currentStep,
+      userInput,
+      rating: null,
+      feedback: "",
+      botMessage: "",
+      error: "",
       emailSent: false,
-    };
-  }
+      retryCount: 0,
+    },
+    threadConfig
+  );
 
-  // ─── ASK_FEEDBACK: User submitted feedback ──────────────────────────
-  if (currentStep === "ASK_FEEDBACK" || currentStep === "FEEDBACK_INVALID") {
-    const savedState = stateStore.get(sessionId);
-    const rating = savedState?.rating ?? null;
-
-    // Run captureAndSend via the graph
-    const result = await feedbackGraph.invoke(
-      {
-        step: "CAPTURE_FEEDBACK",
-        userInput,
-        rating,
-        feedback: "",
-        botMessage: "",
-        error: "",
-        emailSent: false,
-        retryCount: 0,
-      },
-      { configurable: { thread_id: `${sessionId}-capture` } }
-    );
-
-    if (result.step === "FEEDBACK_INVALID") {
-      // Re-ask feedback
-      const askResult = await feedbackGraph.invoke(
-        {
-          step: "FEEDBACK_INVALID",
-          userInput: "",
-          rating,
-          feedback: "",
-          botMessage: "",
-          error: "INVALID_FEEDBACK",
-          emailSent: false,
-          retryCount: 0,
-        },
-        { configurable: { thread_id: `${sessionId}-reask-fb` } }
-      );
-
-      return {
-        botMessage: askResult.botMessage,
-        nextStep: "ASK_FEEDBACK",
-        rating,
-        emailSent: false,
-      };
-    }
-
-    if (result.step === "EMAIL_FAILED") {
-      // Full restart
-      const askResult = await feedbackGraph.invoke(
-        {
-          step: "EMAIL_FAILED",
-          userInput: "",
-          rating: null,
-          feedback: "",
-          botMessage: "",
-          error: "EMAIL_SEND_FAILED",
-          emailSent: false,
-          retryCount: 0,
-        },
-        { configurable: { thread_id: `${sessionId}-restart` } }
-      );
-
-      stateStore.set(sessionId, { rating: null });
-
-      return {
-        botMessage: askResult.botMessage,
-        nextStep: "ASK_RATING",
-        rating: null,
-        emailSent: false,
-      };
-    }
-
-    // Success!
-    const thanksResult = await feedbackGraph.invoke(
-      {
-        step: "EMAIL_SENT",
-        userInput: "",
-        rating,
-        feedback: result.feedback,
-        botMessage: "",
-        error: "",
-        emailSent: true,
-        retryCount: 0,
-      },
-      { configurable: { thread_id: `${sessionId}-thanks` } }
-    );
-
-    return {
-      botMessage: thanksResult.botMessage,
-      nextStep: "DONE",
-      rating,
-      emailSent: true,
-    };
-  }
-
-  // ─── DONE ────────────────────────────────────────────────────────────
   return {
-    botMessage: "Your feedback has already been submitted. Thank you! Refresh the page to start a new survey.",
-    nextStep: "DONE",
-    rating: null,
-    emailSent: true,
+    botMessage: result.botMessage,
+    nextStep: result.step,
+    rating: result.rating ?? null,
+    emailSent: result.emailSent ?? false,
   };
 }

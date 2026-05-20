@@ -1,0 +1,211 @@
+{
+  "nodes": [
+    {
+      "id": "c1",
+      "title": "Next.js feedback bot",
+      "summary": "Implements a feedback interface using LangGraph state machine to drive conversation.",
+      "tags": ["project", "framework"]
+    },
+    {
+      "id": "c2",
+      "title": "Duplicate frontend pages",
+      "summary": "Main and widget pages contain nearly identical flow logic, causing redundancy.",
+      "tags": ["duplication", "frontend"]
+    },
+    {
+      "id": "c3",
+      "title": "Missing shared hook",
+      "summary": "No common hook abstracts duplicated flow, leading to repeated code.",
+      "tags": ["abstraction", "hook"]
+    },
+    {
+      "id": "c4",
+      "title": "Dual state stores",
+      "summary": "graph.ts maintains both an in-memory Map and a MemorySaver checkpointer, creating inconsistent state sources.",
+      "tags": ["state", "store"]
+    },
+    {
+      "id": "c5",
+      "title": "Rating persistence mismatch",
+      "summary": "In-memory store keeps rating across calls while checkpointer never aggregates full state, causing data loss.",
+      "tags": ["bug", "state"]
+    },
+    {
+      "id": "c6",
+      "title": "Graph-executor mismatch",
+      "summary": "Defined graph ends at END but executor manually re-invokes graph, contradicting intended flow.",
+      "tags": ["architecture", "execution"]
+    },
+    {
+      "id": "c7",
+      "title": "Unused Prisma DB layer",
+      "summary": "db.ts and Prisma are present but never accessed, adding dead code.",
+      "tags": ["deadcode", "database"]
+    },
+    {
+      "id": "c8",
+      "title": "Global Toaster import",
+      "summary": "layout.tsx loads toast components globally though no page uses them, inflating bundle size.",
+      "tags": ["bloat", "ui"]
+    },
+    {
+      "id": "c9",
+      "title": "Unused sidebar UI imports",
+      "summary": "sidebar.tsx imports many UI components that feedback pages never use, creating unnecessary dependencies.",
+      "tags": ["bloat", "ui"]
+    },
+    {
+      "id": "c10",
+      "title": "Mutable SMTP transporter",
+      "summary": "smtp.ts creates transporter as mutable module variable and reads env vars at call time, risking inconsistent configuration.",
+      "tags": ["resource", "init"]
+    },
+    {
+      "id": "c11",
+      "title": "Widget global mutable state",
+      "summary": "widget.js relies on shared mutable variables without encapsulation, leading to coupling and side effects.",
+      "tags": ["state", "coupling"]
+    },
+    {
+      "id": "c12",
+      "title": "Feedback flow steps",
+      "summary": "Defined sequence INIT-askRating-validateRating-askFeedback-captureAndSend-thankYou governs user interaction.",
+      "tags": ["flow", "steps"]
+    },
+    {
+      "id": "c13",
+      "title": "Invalid input loop",
+      "summary": "Validation failures or email errors cause the flow to loop back, potentially trapping users.",
+      "tags": ["error", "loop"]
+    },
+    {
+      "id": "c14",
+      "title": "Frontend feedback API",
+      "summary": "Client POSTs sessionId, userInput, and currentStep to /api/feedback, expecting a structured response.",
+      "tags": ["api", "contract"]
+    },
+    {
+      "id": "c15",
+      "title": "Backend response payload",
+      "summary": "Returns botMessage, nextStep, rating, and emailSent status to guide next client action.",
+      "tags": ["api", "response"]
+    },
+    {
+      "id": "c16",
+      "title": "Single source of truth",
+      "summary": "Consolidating state into one store eliminates inconsistencies and simplifies reasoning.",
+      "tags": ["design", "state"]
+    },
+    {
+      "id": "c17",
+      "title": "Extract shared hook",
+      "summary": "Refactor duplicated logic into a reusable hook to reduce code duplication.",
+      "tags": ["refactor", "hook"]
+    },
+    {
+      "id": "c18",
+      "title": "Align executor with graph",
+      "summary": "Remove manual re-invocation and let the graph handle step progression naturally.",
+      "tags": ["architecture", "executor"]
+    },
+    {
+      "id": "c19",
+      "title": "Remove dead DB code",
+      "summary": "Delete db.ts and Prisma imports to clean codebase and reduce bundle size.",
+      "tags": ["cleanup", "database"]
+    },
+    {
+      "id": "c20",
+      "title": "Eliminate unnecessary toasts",
+      "summary": "Delete global toast imports and usage where not needed.",
+      "tags": ["cleanup", "ui"]
+    },
+    {
+      "id": "c21",
+      "title": "Prune unused UI imports",
+      "summary": "Strip sidebar's unused component imports to streamline dependencies.",
+      "tags": ["cleanup", "ui"]
+    },
+    {
+      "id": "c22",
+      "title": "Initialize SMTP once",
+      "summary": "Create transporter at module load with env vars, avoiding mutable reinitialization.",
+      "tags": ["resource", "init"]
+    },
+    {
+      "id": "c23",
+      "title": "Encapsulate widget state",
+      "summary": "Wrap widget variables in a closure or component state to prevent global side effects.",
+      "tags": ["encapsulation", "state"]
+    },
+    {
+      "id": "c24",
+      "title": "Robust email error handling",
+      "summary": "Implement explicit handling for email failures to avoid silent loops.",
+      "tags": ["error", "handling"]
+    },
+    {
+      "id": "c25",
+      "title": "Terminate feedback loop",
+      "summary": "Ensure flow reaches thankYou and stops, preventing infinite repetitions.",
+      "tags": ["flow", "termination"]
+    },
+    {
+      "id": "c26",
+      "title": "SessionId based tracking",
+      "summary": "Use sessionId to correlate user steps across requests, enabling stateless server design.",
+      "tags": ["session", "tracking"]
+    }
+  ],
+  "edges": [
+    { "source": "c1", "target": "c12", "label": "enables", "strength": 0.9 },
+    { "source": "c12", "target": "c14", "label": "requires", "strength": 0.9 },
+    { "source": "c14", "target": "c15", "label": "produces", "strength": 0.9 },
+    { "source": "c3", "target": "c2", "label": "causes", "strength": 0.9 },
+    { "source": "c2", "target": "c3", "label": "drives", "strength": 0.8 },
+    { "source": "c4", "target": "c5", "label": "creates", "strength": 0.9 },
+    { "source": "c6", "target": "c4", "label": "causes", "strength": 0.7 },
+    { "source": "c5", "target": "c13", "label": "exacerbates", "strength": 0.7 },
+    { "source": "c25", "target": "c13", "label": "disables", "strength": 0.9 },
+    { "source": "c25", "target": "c12", "label": "terminates", "strength": 0.8 },
+    { "source": "c16", "target": "c4", "label": "enforces", "strength": 0.9 },
+    { "source": "c16", "target": "c5", "label": "resolves", "strength": 0.9 },
+    { "source": "c17", "target": "c2", "label": "remedies", "strength": 0.9 },
+    { "source": "c17", "target": "c3", "label": "provides", "strength": 0.9 },
+    { "source": "c18", "target": "c6", "label": "aligns", "strength": 0.9 },
+    { "source": "c19", "target": "c7", "label": "removes", "strength": 0.9 },
+    { "source": "c20", "target": "c8", "label": "eliminates", "strength": 0.9 },
+    { "source": "c21", "target": "c9", "label": "prunes", "strength": 0.9 },
+    { "source": "c22", "target": "c10", "label": "replaces", "strength": 0.9 },
+    { "source": "c24", "target": "c10", "label": "hardens", "strength": 0.8 },
+    { "source": "c23", "target": "c11", "label": "encapsulates", "strength": 0.9 },
+    { "source": "c26", "target": "c12", "label": "enables", "strength": 0.8 },
+    { "source": "c26", "target": "c5", "label": "supports", "strength": 0.7 }
+  ],
+  "metadata": {
+    "project": "gem-feedback-bot",
+    "date": "2026-05-20",
+    "validation_score": 0.78,
+    "validation_threshold": 0.75,
+    "pipeline": "EXTRACT → LINK → VALIDATE → REFINE",
+    "clusters": {
+      "problems": {
+        "color": "red/brown",
+        "nodes": ["c2", "c3", "c4", "c5", "c6", "c7", "c8", "c9", "c10", "c11", "c13"]
+      },
+      "fixes": {
+        "color": "green",
+        "nodes": ["c16", "c17", "c18", "c19", "c20", "c21", "c22", "c23", "c24", "c25"]
+      },
+      "core_flow": {
+        "color": "blue",
+        "nodes": ["c1", "c12", "c14", "c15", "c26"]
+      }
+    },
+    "edge_strength_legend": {
+      "gte_0.7": "Bright purple — Strong connection",
+      "0.4_to_0.69": "Indigo/blue — Moderate connection",
+      "lt_0.4": "Gray — Weak / speculative"
+    }
+  }
+}

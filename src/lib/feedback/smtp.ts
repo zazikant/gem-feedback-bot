@@ -2,7 +2,7 @@
  * SMTP Email Service
  *
  * Sends feedback JSON payload via SMTP to the configured address.
- * Does NOT store anything in Supabase — just forwards the output.
+ * Transporter is initialized eagerly at module load with startup validation.
  */
 
 import nodemailer from "nodemailer";
@@ -21,33 +21,38 @@ const SMTP_PASS = process.env.SMTP_PASS || "";
 const SMTP_FROM = process.env.SMTP_FROM || SMTP_USER;
 const SMTP_TO = process.env.SMTP_TO || SMTP_USER;
 
-// Create a reusable transporter (lazy init)
-let transporter: nodemailer.Transporter | null = null;
-
-function getTransporter(): nodemailer.Transporter {
-  if (!transporter) {
-    transporter = nodemailer.createTransport({
-      host: SMTP_HOST,
-      port: SMTP_PORT,
-      secure: SMTP_PORT === 465, // true for port 465, false for 587
-      auth: {
+const transporter = nodemailer.createTransport({
+  host: SMTP_HOST,
+  port: SMTP_PORT,
+  secure: SMTP_PORT === 465,
+  auth: SMTP_USER
+    ? {
         user: SMTP_USER,
         pass: SMTP_PASS,
-      },
-      tls: {
-        // Do not fail on self-signed certs
-        rejectUnauthorized: false,
-      },
-    });
-  }
-  return transporter;
+      }
+    : undefined,
+  tls: {
+    rejectUnauthorized: false,
+  },
+});
+
+if (SMTP_HOST) {
+  transporter.verify().then(() => {
+    console.log("SMTP transporter ready");
+  }).catch((err: Error) => {
+    console.warn("SMTP transporter verification failed:", err.message);
+  });
+} else {
+  console.warn("SMTP_HOST not set — email sending will fail");
 }
 
 /**
  * Sends the feedback payload as a JSON email via SMTP.
  */
 export async function sendFeedbackEmail(payload: FeedbackPayload): Promise<boolean> {
-  const transport = getTransporter();
+  if (!SMTP_HOST) {
+    throw new Error("SMTP is not configured. Set SMTP_HOST and related environment variables.");
+  }
 
   const subject = `GEM Feedback — Rating: ${payload.rating}/10 — ${payload.timestamp}`;
   const jsonBody = JSON.stringify(payload, null, 2);
@@ -79,7 +84,7 @@ export async function sendFeedbackEmail(payload: FeedbackPayload): Promise<boole
   `;
 
   try {
-    const result = await transport.sendMail({
+    const result = await transporter.sendMail({
       from: SMTP_FROM,
       to: SMTP_TO,
       subject,

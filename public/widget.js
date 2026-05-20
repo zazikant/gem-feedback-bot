@@ -3,6 +3,9 @@
  *
  * Usage (paste into WordPress Elementor HTML block or any page):
  *
+ * <script src="https://gem-feedback-bot.vercel.app/widget.js" data-auto-open="true"></script>
+ *
+ * Or with API:
  * <script>
  *   (function(d,t){
  *     var v=d.createElement(t),s=d.getElementsByTagName(t)[0];
@@ -19,38 +22,32 @@
  *   })(document,'script');
  * </script>
  *
- * Or simply:
- * <script src="https://gem-feedback-bot.vercel.app/widget.js" data-auto-open="true"></script>
+ * All state is encapsulated within a closure — no mutable globals.
  */
 
 (function (window, document) {
   "use strict";
 
-  var WIDGET_URL = "https://gem-feedback-bot.vercel.app/widget";
+  var DEFAULT_WIDGET_URL = "https://gem-feedback-bot.vercel.app/widget";
+
   var SCRIPT_TAG = document.currentScript;
   var autoOpen = SCRIPT_TAG && SCRIPT_TAG.getAttribute("data-auto-open") === "true";
 
-  // State
-  var isOpen = false;
-  var isLoaded = false;
-  var container = null;
-  var iframe = null;
-  var toggleBtn = null;
-  var overlay = null;
-
-  // SVG icons
   var chatIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>';
 
   var closeIcon = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>';
 
-  // Inject styles
+  var _stylesInjected = false;
+
   function injectStyles() {
+    if (_stylesInjected) return;
+    _stylesInjected = true;
+
     var style = document.createElement("style");
     style.id = "gem-feedback-styles";
     style.textContent = [
       "@keyframes gem-fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }",
       "@keyframes gem-fade-out { from { opacity: 1; transform: translateY(0); } to { opacity: 0; transform: translateY(10px); } }",
-      "@keyframes gem-bounce { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.1); } }",
       "",
       "#gem-feedback-root { position: fixed; z-index: 999999; font-family: system-ui, -apple-system, sans-serif; }",
       "",
@@ -99,98 +96,101 @@
     document.head.appendChild(style);
   }
 
-  // Create widget DOM
-  function createWidget() {
-    // Overlay (mobile dismiss)
-    overlay = document.createElement("div");
-    overlay.id = "gem-feedback-overlay";
-    overlay.addEventListener("click", function () { close(); });
-    document.body.appendChild(overlay);
+  function createWidget(widgetUrl) {
+    var isOpen = false;
+    var container = null;
+    var iframe = null;
+    var toggleBtn = null;
+    var overlay = null;
 
-    // Toggle button
+    function open() {
+      if (isOpen) return;
+
+      if (!container) {
+        overlay = document.createElement("div");
+        overlay.id = "gem-feedback-overlay";
+        overlay.addEventListener("click", close);
+        document.body.appendChild(overlay);
+
+        container = document.createElement("div");
+        container.id = "gem-feedback-container";
+
+        iframe = document.createElement("iframe");
+        iframe.id = "gem-feedback-iframe";
+        iframe.src = widgetUrl;
+        iframe.setAttribute("allow", "clipboard-write");
+        container.appendChild(iframe);
+
+        document.body.appendChild(container);
+      } else {
+        container.style.display = "";
+        container.classList.remove("gem-closing");
+      }
+
+      overlay.classList.add("gem-visible");
+      toggleBtn.classList.add("gem-open");
+      toggleBtn.innerHTML = closeIcon;
+      toggleBtn.setAttribute("aria-label", "Close GEM Feedback");
+      isOpen = true;
+    }
+
+    function close() {
+      if (!isOpen) return;
+
+      container.classList.add("gem-closing");
+      overlay.classList.remove("gem-visible");
+      toggleBtn.classList.remove("gem-open");
+      toggleBtn.innerHTML = chatIcon;
+      toggleBtn.setAttribute("aria-label", "Open GEM Feedback");
+
+      setTimeout(function () {
+        if (container) container.style.display = "none";
+        container.classList.remove("gem-closing");
+      }, 200);
+
+      isOpen = false;
+    }
+
+    function toggle() {
+      if (isOpen) close(); else open();
+    }
+
+    injectStyles();
+
     toggleBtn = document.createElement("button");
     toggleBtn.id = "gem-feedback-toggle";
     toggleBtn.setAttribute("aria-label", "Open GEM Feedback");
     toggleBtn.innerHTML = chatIcon;
-    toggleBtn.addEventListener("click", function () {
-      if (isOpen) close(); else open();
-    });
+    toggleBtn.addEventListener("click", toggle);
     document.body.appendChild(toggleBtn);
 
-    isLoaded = true;
+    return { open: open, close: close, toggle: toggle };
   }
 
-  // Open widget
-  function open() {
-    if (!isLoaded) createWidget();
-    if (isOpen) return;
+  var widgetInstance = null;
 
-    if (!container) {
-      container = document.createElement("div");
-      container.id = "gem-feedback-container";
-
-      iframe = document.createElement("iframe");
-      iframe.id = "gem-feedback-iframe";
-      iframe.src = WIDGET_URL;
-      iframe.setAttribute("allow", "clipboard-write");
-      container.appendChild(iframe);
-
-      document.body.appendChild(container);
-    } else {
-      container.style.display = "";
-      container.classList.remove("gem-closing");
-    }
-
-    overlay.classList.add("gem-visible");
-    toggleBtn.classList.add("gem-open");
-    toggleBtn.innerHTML = closeIcon;
-    toggleBtn.setAttribute("aria-label", "Close GEM Feedback");
-    isOpen = true;
-  }
-
-  // Close widget
-  function close() {
-    if (!isOpen) return;
-
-    container.classList.add("gem-closing");
-    overlay.classList.remove("gem-visible");
-    toggleBtn.classList.remove("gem-open");
-    toggleBtn.innerHTML = chatIcon;
-    toggleBtn.setAttribute("aria-label", "Open GEM Feedback");
-
-    setTimeout(function () {
-      if (container) container.style.display = "none";
-      container.classList.remove("gem-closing");
-    }, 200);
-
-    isOpen = false;
-  }
-
-  // Public API (similar to Voiceflow pattern)
   window.gemFeedback = {
     load: function (config) {
-      if (config && config.url) WIDGET_URL = config.url + "/widget";
-      injectStyles();
-      createWidget();
+      var url = (config && config.url) ? config.url + "/widget" : DEFAULT_WIDGET_URL;
+      widgetInstance = createWidget(url);
       return Promise.resolve();
     },
     open: function () {
-      open();
+      if (widgetInstance) widgetInstance.open();
     },
     close: function () {
-      close();
+      if (widgetInstance) widgetInstance.close();
     },
     toggle: function () {
-      if (isOpen) close(); else open();
+      if (widgetInstance) widgetInstance.toggle();
     },
   };
 
   // Auto-init if loaded via <script src="..."> (not the function wrapper)
   if (SCRIPT_TAG && SCRIPT_TAG.src && SCRIPT_TAG.src.indexOf("widget.js") !== -1) {
-    injectStyles();
-    createWidget();
+    widgetInstance = createWidget(DEFAULT_WIDGET_URL);
     if (autoOpen) {
-      setTimeout(function () { open(); }, 1000);
+      setTimeout(function () { widgetInstance.open(); }, 1000);
     }
   }
 

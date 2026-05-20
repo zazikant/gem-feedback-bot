@@ -1,151 +1,26 @@
 "use client";
 
-import { useState, useRef, useEffect, FormEvent } from "react";
+import { Star, RotateCcw, CheckCircle2, Bot, User, Loader2, Send } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
-import {
-  Send,
-  Bot,
-  User,
-  Loader2,
-  Star,
-  RotateCcw,
-  CheckCircle2,
-  X,
-} from "lucide-react";
-
-interface Message {
-  id: string;
-  role: "user" | "bot";
-  content: string;
-}
-
-type FlowStep =
-  | "INIT"
-  | "ASK_RATING"
-  | "RATING_INVALID"
-  | "ASK_FEEDBACK"
-  | "FEEDBACK_INVALID"
-  | "EMAIL_SENT"
-  | "EMAIL_FAILED"
-  | "THANK_YOU"
-  | "DONE";
+import { useFeedbackFlow } from "@/hooks/use-feedback-flow";
 
 export default function WidgetPage() {
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [currentStep, setCurrentStep] = useState<FlowStep>("INIT");
-  const [sessionId] = useState(() => crypto.randomUUID());
-  const [rating, setRating] = useState<number | null>(null);
-  const [emailSent, setEmailSent] = useState(false);
-  const scrollRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const formRef = useRef<HTMLFormElement>(null);
-
-  useEffect(() => {
-    startConversation();
-  }, []);
-
-  useEffect(() => {
-    if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-    }
-  }, [messages, isLoading]);
-
-  useEffect(() => {
-    if (textareaRef.current) {
-      textareaRef.current.style.height = "auto";
-      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
-    }
-  }, [input]);
-
-  const addMessage = (role: "user" | "bot", content: string) => {
-    setMessages((prev) => [...prev, { id: crypto.randomUUID(), role, content }]);
-  };
-
-  const startConversation = async () => {
-    setIsLoading(true);
-    try {
-      const res = await fetch("/api/feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, userInput: "", currentStep: "INIT" }),
-      });
-      const data = await res.json();
-      if (data.botMessage) addMessage("bot", data.botMessage);
-      setCurrentStep(data.nextStep || "ASK_RATING");
-      setRating(data.rating ?? null);
-      setEmailSent(data.emailSent ?? false);
-    } catch {
-      addMessage("bot", "Failed to start. Please refresh.");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleSubmit = async (e?: FormEvent) => {
-    e?.preventDefault();
-    const trimmed = input.trim();
-    if (!trimmed || isLoading) return;
-
-    addMessage("user", trimmed);
-    setInput("");
-    setIsLoading(true);
-
-    if (textareaRef.current) textareaRef.current.style.height = "auto";
-
-    try {
-      const res = await fetch("/api/feedback", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, userInput: trimmed, currentStep }),
-      });
-      const data = await res.json();
-      if (data.botMessage) addMessage("bot", data.botMessage);
-      setCurrentStep(data.nextStep || currentStep);
-      setRating(data.rating ?? rating);
-      setEmailSent(data.emailSent ?? false);
-    } catch {
-      addMessage("bot", "Something went wrong. Please try again.");
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      handleSubmit();
-    }
-  };
-
-  const restartSurvey = () => {
-    setMessages([]);
-    setInput("");
-    setCurrentStep("INIT");
-    setRating(null);
-    setEmailSent(false);
-    startConversation();
-  };
-
-  const getPlaceholder = () => {
-    if (isLoading) return "Please wait...";
-    switch (currentStep) {
-      case "ASK_RATING":
-      case "RATING_INVALID":
-        return "Rate from 1 to 10";
-      case "ASK_FEEDBACK":
-      case "FEEDBACK_INVALID":
-        return "Your experience...";
-      case "DONE":
-        return "Done!";
-      default:
-        return "Type here...";
-    }
-  };
-
-  const isInputDisabled = isLoading || currentStep === "DONE";
+  const {
+    messages,
+    input,
+    setInput,
+    isLoading,
+    currentStep,
+    scrollRef,
+    textareaRef,
+    formRef,
+    handleSubmit,
+    handleKeyDown,
+    restartSurvey,
+    getPlaceholder,
+    isInputDisabled,
+  } = useFeedbackFlow();
 
   return (
     <div className="flex flex-col h-screen bg-white" style={{ fontFamily: "system-ui, -apple-system, sans-serif" }}>
