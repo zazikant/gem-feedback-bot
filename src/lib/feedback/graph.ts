@@ -5,11 +5,13 @@
  * executor (runFeedbackStep), which decides the next step based on state.
  *
  * Flow:
- *   INIT → askRating → validateRating ─(valid)→ askFeedback → askCompany → captureAndSend → thankYou → END
- *                                    ─(invalid)→ askRating (loop)               ─(invalid)→ askFeedback (loop)
+ *   INIT → askRating → validateRating ─(valid)→ askFeedback → askCompany ──→ captureAndSend → thankYou → END
+ *                                    ─(invalid)→ askRating (loop)   ─(invalid)→ askFeedback (loop)
  *                                                                              ─(email fail)→ askRating (restart)
  *
  * Company name step is optional — user can press Enter to skip.
+ * Rating and feedback are persisted in-memory across steps since each
+ * graph.invoke() call uses fresh state.
  */
 
 import { Annotation, StateGraph, END, START, MemorySaver } from "@langchain/langgraph";
@@ -150,24 +152,21 @@ function askCompany(state: FeedbackStateType): Partial<FeedbackStateType> {
 async function captureAndSend(
   state: FeedbackStateType
 ): Promise<Partial<FeedbackStateType>> {
-  const feedback = (state.userInput || "").trim();
+  const feedback = state.feedback || (state.userInput || "").trim();
 
   if (!feedback || feedback.length < 10) {
-    if (!state.feedback || state.feedback.length < 10) {
-      return {
-        step: "FEEDBACK_INVALID",
-        error: "INVALID_FEEDBACK",
-        feedback: "",
-      };
-    }
+    return {
+      step: "FEEDBACK_INVALID",
+      error: "INVALID_FEEDBACK",
+      feedback: "",
+    };
   }
 
-  const finalFeedback = state.feedback || feedback;
   const company = state.company || "";
 
   const payload = {
     rating: state.rating,
-    feedback: finalFeedback,
+    feedback,
     company: company || "Not provided",
     timestamp: new Date().toISOString(),
     source: "GEM Feedback Bot",
@@ -177,7 +176,7 @@ async function captureAndSend(
     await sendFeedbackEmail(payload);
     return {
       step: "EMAIL_SENT",
-      feedback: finalFeedback,
+      feedback,
       company,
       emailSent: true,
       error: "",
@@ -194,13 +193,11 @@ async function captureAndSend(
 }
 
 function thankYou(state: FeedbackStateType): Partial<FeedbackStateType> {
-  const companyPart = state.company
-    ? ` from ${state.company}`
-    : "";
+  const companyPart = state.company ? ` from ${state.company}` : "";
   return {
     step: "DONE",
     botMessage:
-      `Thank you so much for your feedback!${companyPart} Your response has been recorded. We truly appreciate you taking the time to share your experience with GEM. Have a wonderful day!`,
+      `Thank you so much for your feedback${companyPart}! Your response has been recorded. We truly appreciate you taking the time to share your experience with GEM. Have a wonderful day!`,
   };
 }
 
@@ -236,6 +233,10 @@ const workflow = new StateGraph(FeedbackState)
 const checkpointer = new MemorySaver();
 export const feedbackGraph = workflow.compile({ checkpointer });
 
+// ─── In-memory session store for cross-step persistence ──────────────────────
+
+const sessionStore = new Map<string, { rating: number | null; feedback: string; company: string }>();
+
 // ─── Step-based Executor ────────────────────────────────────────────────────
 
 export async function runFeedbackStep(
@@ -245,9 +246,11 @@ export async function runFeedbackStep(
 ): Promise<{ botMessage: string; nextStep: string; rating: number | null; emailSent: boolean; company: string }> {
 
   const threadId = sessionId;
+  const saved = sessionStore.get(sessionId) || { rating: null, feedback: "", company: "" };
 
   // ─── INIT ────────────────────────────────────────────────────────────
   if (currentStep === "INIT") {
+    sessionStore.delete(sessionId);
     const result = await feedbackGraph.invoke(
       {
         step: "INIT",
@@ -314,7 +317,9 @@ export async function runFeedbackStep(
       };
     }
 
-    // Valid — ask for feedback
+    // Valid — persist rating and ask for feedback
+    sessionStore.set(sessionId, { ...saved, rating: result.rating ?? null });
+
     const feedbackResult = await feedbackGraph.invoke(
       {
         step: "RATING_VALID",
@@ -362,19 +367,21 @@ export async function runFeedbackStep(
       return {
         botMessage: askResult.botMessage,
         nextStep: "ASK_FEEDBACK",
-        rating: null,
+        rating: saved.rating,
         emailSent: false,
         company: "",
       };
     }
 
-    // Valid feedback — move to ask company
+    // Valid feedback — persist it and ask company
+    sessionStore.set(sessionId, { ...saved, feedback: trimmed });
+
     const companyResult = await feedbackGraph.invoke(
       {
         step: "ASK_COMPANY",
         userInput: "",
         rating: null,
-        feedback: trimmed,
+        feedback: "",
         company: "",
         botMessage: "",
         error: "",
@@ -387,7 +394,7 @@ export async function runFeedbackStep(
     return {
       botMessage: companyResult.botMessage,
       nextStep: "ASK_COMPANY",
-      rating: null,
+      rating: saved.rating,
       emailSent: false,
       company: "",
     };
@@ -397,13 +404,16 @@ export async function runFeedbackStep(
   if (currentStep === "ASK_COMPANY") {
     const companyName = userInput.trim();
 
-    // Send the email with feedback stored from previous step
+    // Persist company name
+    sessionStore.set(sessionId, { ...saved, company: companyName });
+
+    // Send email with all accumulated data
     const result = await feedbackGraph.invoke(
       {
         step: "CAPTURE_FEEDBACK",
         userInput: companyName,
-        rating: null,
-        feedback: "",
+        rating: saved.rating,
+        feedback: saved.feedback,
         company: companyName,
         botMessage: "",
         error: "",
@@ -414,6 +424,7 @@ export async function runFeedbackStep(
     );
 
     if (result.step === "EMAIL_FAILED") {
+      sessionStore.delete(sessionId);
       const askResult = await feedbackGraph.invoke(
         {
           step: "EMAIL_FAILED",
@@ -438,12 +449,14 @@ export async function runFeedbackStep(
       };
     }
 
+    // Success
+    sessionStore.delete(sessionId);
     const thanksResult = await feedbackGraph.invoke(
       {
         step: "EMAIL_SENT",
         userInput: "",
-        rating: null,
-        feedback: result.feedback || "",
+        rating: saved.rating,
+        feedback: saved.feedback,
         company: companyName,
         botMessage: "",
         error: "",
@@ -456,7 +469,7 @@ export async function runFeedbackStep(
     return {
       botMessage: thanksResult.botMessage,
       nextStep: "DONE",
-      rating: null,
+      rating: saved.rating,
       emailSent: true,
       company: companyName,
     };
