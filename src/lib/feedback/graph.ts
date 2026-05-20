@@ -172,6 +172,8 @@ async function captureAndSend(
     source: "GEM Feedback Bot",
   };
 
+  console.log("[captureAndSend] Payload rating:", payload.rating, "feedback:", payload.feedback, "company:", payload.company);
+
   try {
     await sendFeedbackEmail(payload);
     return {
