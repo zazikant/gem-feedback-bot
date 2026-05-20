@@ -150,6 +150,7 @@ export function useFeedbackFlow({ apiUrl = "/api/feedback" }: UseFeedbackFlowOpt
     setRating(null);
     setEmailSent(false);
     setCompany("");
+    startConversation();
   }, [startConversation]);
 
   const getPlaceholder = useCallback(() => {

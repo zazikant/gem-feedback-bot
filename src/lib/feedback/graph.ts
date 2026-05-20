@@ -1,16 +1,15 @@
 /**
  * LangGraph-based Feedback Flow
  *
- * Uses LangGraph's StateGraph with proper conditional edges.
- * The graph is self-contained: each node transitions to the next
- * based on state, with no external executor loop required.
+ * Step-based state machine: each invocation runs one node, returns to the
+ * executor (runFeedbackStep), which decides the next step based on state.
  *
- * Flow: START → askRating ──(conditional)──→ [validateRating | askRating (re-ask)]
- *        validateRating ──(conditional)──→ [askFeedback | askRating (invalid)]
- *        askFeedback ──(conditional)──→ [askCompany | askFeedback (re-ask)]
- *        askCompany ──(always)──→ captureAndSend
- *        captureAndSend ──(conditional)──→ [thankYou | askFeedback (re-ask) | askRating (email fail)]
- *        thankYou → END
+ * Flow:
+ *   INIT → askRating → validateRating ─(valid)→ askFeedback → askCompany → captureAndSend → thankYou → END
+ *                                    ─(invalid)→ askRating (loop)               ─(invalid)→ askFeedback (loop)
+ *                                                                              ─(email fail)→ askRating (restart)
+ *
+ * Company name step is optional — user can press Enter to skip.
  */
 
 import { Annotation, StateGraph, END, START, MemorySaver } from "@langchain/langgraph";
@@ -32,37 +31,35 @@ const FeedbackState = Annotation.Root({
 
 export type FeedbackStateType = typeof FeedbackState.State;
 
-// ─── Conditional Routing Functions ────────────────────────────────────────────
+// ─── Router ─────────────────────────────────────────────────────────────────
 
-function routeFromAskRating(state: FeedbackStateType): "validateRating" | "askRating" {
-  if (state.step === "INIT" || state.step === "EMAIL_FAILED") {
-    return "askRating";
-  }
-  return "validateRating";
+function router(_state: FeedbackStateType): Partial<FeedbackStateType> {
+  return {};
 }
 
-function routeFromValidateRating(state: FeedbackStateType): "askFeedback" | "askRating" {
-  if (state.step === "RATING_INVALID") {
-    return "askRating";
+function routeFromRouter(
+  state: FeedbackStateType
+): "askRating" | "validateRating" | "askFeedback" | "askCompany" | "captureAndSend" | "thankYou" {
+  switch (state.step) {
+    case "INIT":
+    case "RATING_INVALID":
+    case "EMAIL_FAILED":
+      return "askRating";
+    case "VALIDATE_RATING":
+      return "validateRating";
+    case "RATING_VALID":
+    case "FEEDBACK_INVALID":
+      return "askFeedback";
+    case "ASK_COMPANY":
+      return "askCompany";
+    case "CAPTURE_FEEDBACK":
+      return "captureAndSend";
+    case "EMAIL_SENT":
+    case "DONE":
+      return "thankYou";
+    default:
+      return "askRating";
   }
-  return "askingFeedback";
-}
-
-function routeFromAskFeedback(state: FeedbackStateType): "askCompany" | "askFeedback" {
-  if (state.step === "FEEDBACK_INVALID") {
-    return "askFeedback";
-  }
-  return "askCompany";
-}
-
-function routeFromCaptureAndSend(state: FeedbackStateType): "thankYou" | "askFeedback" | "askRating" {
-  if (state.step === "FEEDBACK_INVALID") {
-    return "askFeedback";
-  }
-  if (state.step === "EMAIL_FAILED") {
-    return "askRating";
-  }
-  return "thankYou";
 }
 
 // ─── Graph Nodes ────────────────────────────────────────────────────────────
@@ -70,7 +67,7 @@ function routeFromCaptureAndSend(state: FeedbackStateType): "thankYou" | "askFee
 function askRating(state: FeedbackStateType): Partial<FeedbackStateType> {
   if (state.step === "RATING_INVALID") {
     return {
-      step: "RATING_INVALID",
+      step: "ASK_RATING",
       botMessage:
         "That doesn't look like a valid rating. Please enter a whole number between 1 and 10.",
       error: "INVALID_RATING",
@@ -83,7 +80,7 @@ function askRating(state: FeedbackStateType): Partial<FeedbackStateType> {
 
   if (state.step === "EMAIL_FAILED") {
     return {
-      step: "EMAIL_FAILED",
+      step: "ASK_RATING",
       botMessage:
         "Sorry, there was an error submitting your feedback. Let's start over.\n\nHow would you rate your overall experience with GEM? Rate from 1 to 10.",
       error: "",
@@ -128,7 +125,7 @@ function validateRating(state: FeedbackStateType): Partial<FeedbackStateType> {
 function askFeedback(state: FeedbackStateType): Partial<FeedbackStateType> {
   if (state.step === "FEEDBACK_INVALID") {
     return {
-      step: "FEEDBACK_INVALID",
+      step: "ASK_FEEDBACK",
       botMessage:
         "It looks like your feedback was too short. Could you please share a bit more about your experience?",
       error: "INVALID_FEEDBACK",
@@ -155,17 +152,14 @@ async function captureAndSend(
 ): Promise<Partial<FeedbackStateType>> {
   const feedback = (state.userInput || "").trim();
 
-  // This node runs twice: once after askFeedback (capturing feedback text),
-  // once after askCompany (capturing company name). We need to determine context.
-  // When called from askCompany path, the feedback is already in state.
-  // When called from askFeedback path, we capture the feedback text.
-
-  if (!state.feedback && (!feedback || feedback.length < 10)) {
-    return {
-      step: "FEEDBACK_INVALID",
-      error: "INVALID_FEEDBACK",
-      feedback: "",
-    };
+  if (!feedback || feedback.length < 10) {
+    if (!state.feedback || state.feedback.length < 10) {
+      return {
+        step: "FEEDBACK_INVALID",
+        error: "INVALID_FEEDBACK",
+        feedback: "",
+      };
+    }
   }
 
   const finalFeedback = state.feedback || feedback;
@@ -213,6 +207,7 @@ function thankYou(state: FeedbackStateType): Partial<FeedbackStateType> {
 // ─── Build the Graph ────────────────────────────────────────────────────────
 
 const workflow = new StateGraph(FeedbackState)
+  .addNode("router", router)
   .addNode("askRating", askRating)
   .addNode("validateRating", validateRating)
   .addNode("askFeedback", askFeedback)
@@ -220,33 +215,22 @@ const workflow = new StateGraph(FeedbackState)
   .addNode("captureAndSend", captureAndSend)
   .addNode("thankYou", thankYou)
 
-  .addEdge(START, "askRating")
+  .addEdge(START, "router")
 
-  .addConditionalEdges("askRating", routeFromAskRating, {
+  .addConditionalEdges("router", routeFromRouter, {
+    askRating: "askRating",
     validateRating: "validateRating",
-    askRating: "askRating",
-  })
-
-  .addEdge("askRating", "validateRating")
-
-  .addConditionalEdges("validateRating", routeFromValidateRating, {
-    askingFeedback: "askFeedback",
-    askRating: "askRating",
-  })
-
-  .addConditionalEdges("askFeedback", routeFromAskFeedback, {
+    askFeedback: "askFeedback",
     askCompany: "askCompany",
-    askFeedback: "askFeedback",
-  })
-
-  .addEdge("askCompany", "captureAndSend")
-
-  .addConditionalEdges("captureAndSend", routeFromCaptureAndSend, {
+    captureAndSend: "captureAndSend",
     thankYou: "thankYou",
-    askFeedback: "askFeedback",
-    askRating: "askRating",
   })
 
+  .addEdge("askRating", END)
+  .addEdge("validateRating", END)
+  .addEdge("askFeedback", END)
+  .addEdge("askCompany", END)
+  .addEdge("captureAndSend", END)
   .addEdge("thankYou", END);
 
 const checkpointer = new MemorySaver();
@@ -260,8 +244,9 @@ export async function runFeedbackStep(
   currentStep: string
 ): Promise<{ botMessage: string; nextStep: string; rating: number | null; emailSent: boolean; company: string }> {
 
-  const threadConfig = { configurable: { thread_id: sessionId } };
+  const threadId = sessionId;
 
+  // ─── INIT ────────────────────────────────────────────────────────────
   if (currentStep === "INIT") {
     const result = await feedbackGraph.invoke(
       {
@@ -275,7 +260,7 @@ export async function runFeedbackStep(
         emailSent: false,
         retryCount: 0,
       },
-      threadConfig
+      { configurable: { thread_id: threadId } }
     );
 
     return {
@@ -287,62 +272,202 @@ export async function runFeedbackStep(
     };
   }
 
-  if (currentStep === "ASK_COMPANY") {
-    const company = userInput.trim();
-
+  // ─── ASK_RATING: User submitted a rating ─────────────────────────────
+  if (currentStep === "ASK_RATING" || currentStep === "RATING_INVALID") {
     const result = await feedbackGraph.invoke(
       {
-        step: "ASK_COMPANY",
-        userInput: company,
+        step: "VALIDATE_RATING",
+        userInput,
         rating: null,
         feedback: "",
-        company: company,
+        company: "",
         botMessage: "",
         error: "",
         emailSent: false,
         retryCount: 0,
       },
-      threadConfig
+      { configurable: { thread_id: threadId } }
+    );
+
+    if (result.step === "RATING_INVALID") {
+      const askResult = await feedbackGraph.invoke(
+        {
+          step: "RATING_INVALID",
+          userInput: "",
+          rating: null,
+          feedback: "",
+          company: "",
+          botMessage: "",
+          error: "INVALID_RATING",
+          emailSent: false,
+          retryCount: 0,
+        },
+        { configurable: { thread_id: threadId } }
+      );
+
+      return {
+        botMessage: askResult.botMessage,
+        nextStep: "ASK_RATING",
+        rating: null,
+        emailSent: false,
+        company: "",
+      };
+    }
+
+    // Valid — ask for feedback
+    const feedbackResult = await feedbackGraph.invoke(
+      {
+        step: "RATING_VALID",
+        userInput: "",
+        rating: result.rating,
+        feedback: "",
+        company: "",
+        botMessage: "",
+        error: "",
+        emailSent: false,
+        retryCount: 0,
+      },
+      { configurable: { thread_id: threadId } }
     );
 
     return {
-      botMessage: result.botMessage,
-      nextStep: result.step,
+      botMessage: feedbackResult.botMessage,
+      nextStep: "ASK_FEEDBACK",
       rating: result.rating ?? null,
-      emailSent: result.emailSent ?? false,
-      company: company,
+      emailSent: false,
+      company: "",
     };
   }
 
-  const stepMap: Record<string, string> = {
-    ASK_RATING: "validateRating",
-    RATING_INVALID: "validateRating",
-    ASK_FEEDBACK: "captureAndSend",
-    FEEDBACK_INVALID: "captureAndSend",
-  };
+  // ─── ASK_FEEDBACK: User submitted feedback text ──────────────────────
+  if (currentStep === "ASK_FEEDBACK" || currentStep === "FEEDBACK_INVALID") {
+    const trimmed = userInput.trim();
 
-  const graphStep = stepMap[currentStep] || "askRating";
+    if (trimmed.length < 10) {
+      const askResult = await feedbackGraph.invoke(
+        {
+          step: "FEEDBACK_INVALID",
+          userInput: "",
+          rating: null,
+          feedback: "",
+          company: "",
+          botMessage: "",
+          error: "INVALID_FEEDBACK",
+          emailSent: false,
+          retryCount: 0,
+        },
+        { configurable: { thread_id: threadId } }
+      );
 
-  const result = await feedbackGraph.invoke(
-    {
-      step: currentStep,
-      userInput,
+      return {
+        botMessage: askResult.botMessage,
+        nextStep: "ASK_FEEDBACK",
+        rating: null,
+        emailSent: false,
+        company: "",
+      };
+    }
+
+    // Valid feedback — move to ask company
+    const companyResult = await feedbackGraph.invoke(
+      {
+        step: "ASK_COMPANY",
+        userInput: "",
+        rating: null,
+        feedback: trimmed,
+        company: "",
+        botMessage: "",
+        error: "",
+        emailSent: false,
+        retryCount: 0,
+      },
+      { configurable: { thread_id: threadId } }
+    );
+
+    return {
+      botMessage: companyResult.botMessage,
+      nextStep: "ASK_COMPANY",
       rating: null,
-      feedback: "",
-      company: "",
-      botMessage: "",
-      error: "",
       emailSent: false,
-      retryCount: 0,
-    },
-    threadConfig
-  );
+      company: "",
+    };
+  }
 
+  // ─── ASK_COMPANY: User submitted company name (or skipped) ───────────
+  if (currentStep === "ASK_COMPANY") {
+    const companyName = userInput.trim();
+
+    // Send the email with feedback stored from previous step
+    const result = await feedbackGraph.invoke(
+      {
+        step: "CAPTURE_FEEDBACK",
+        userInput: companyName,
+        rating: null,
+        feedback: "",
+        company: companyName,
+        botMessage: "",
+        error: "",
+        emailSent: false,
+        retryCount: 0,
+      },
+      { configurable: { thread_id: threadId } }
+    );
+
+    if (result.step === "EMAIL_FAILED") {
+      const askResult = await feedbackGraph.invoke(
+        {
+          step: "EMAIL_FAILED",
+          userInput: "",
+          rating: null,
+          feedback: "",
+          company: "",
+          botMessage: "",
+          error: "EMAIL_SEND_FAILED",
+          emailSent: false,
+          retryCount: 0,
+        },
+        { configurable: { thread_id: threadId } }
+      );
+
+      return {
+        botMessage: askResult.botMessage,
+        nextStep: "ASK_RATING",
+        rating: null,
+        emailSent: false,
+        company: "",
+      };
+    }
+
+    const thanksResult = await feedbackGraph.invoke(
+      {
+        step: "EMAIL_SENT",
+        userInput: "",
+        rating: null,
+        feedback: result.feedback || "",
+        company: companyName,
+        botMessage: "",
+        error: "",
+        emailSent: true,
+        retryCount: 0,
+      },
+      { configurable: { thread_id: threadId } }
+    );
+
+    return {
+      botMessage: thanksResult.botMessage,
+      nextStep: "DONE",
+      rating: null,
+      emailSent: true,
+      company: companyName,
+    };
+  }
+
+  // ─── DONE ────────────────────────────────────────────────────────────
   return {
-    botMessage: result.botMessage,
-    nextStep: result.step,
-    rating: result.rating ?? null,
-    emailSent: result.emailSent ?? false,
-    company: result.company ?? "",
+    botMessage: "Your feedback has already been submitted. Thank you! Refresh the page to start a new survey.",
+    nextStep: "DONE",
+    rating: null,
+    emailSent: true,
+    company: "",
   };
 }

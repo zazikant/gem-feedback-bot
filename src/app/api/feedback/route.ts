@@ -5,11 +5,12 @@ import { runFeedbackStep } from "@/lib/feedback/graph";
  * Feedback Chat API — LangGraph-powered
  *
  * Flow:
- *   ASK_RATING → VALIDATE ──(valid)──→ ASK_FEEDBACK → CAPTURE_AND_SEND ──(success)──→ THANK_YOU
- *                    │                                         │
- *               (invalid)                                 (error)
- *                    │                                         │
- *                    └──→ ASK_RATING (loop)        ←──────────┘
+ *   ASK_RATING → VALIDATE ──(valid)──→ ASK_FEEDBACK → ASK_COMPANY → CAPTURE_AND_SEND ──(success)──→ THANK_YOU
+ *                    │                                         │                          │
+ *               (invalid)                              (invalid)                 (error)
+ *                    │                                         │                          │
+ *                    └──→ ASK_RATING (loop)       ←───────────┘          ──→ ASK_FEEDBACK (re-ask)
+ *                                                                        └──→ ASK_RATING (restart)
  *
  * Client sends: { sessionId, userInput, currentStep }
  * Server returns: { botMessage, nextStep, rating, emailSent, company }
